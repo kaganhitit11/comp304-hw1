@@ -324,6 +324,106 @@ int process_command(struct command_t *command) {
     }
   }
 
+  // two-process pipe: cmd1 | cmd2
+  if (command->next) {
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+      printf("-%s: pipe: %s\n", sysname, strerror(errno));
+      return SUCCESS;
+    }
+
+    pid_t pid1 = fork();
+    if (pid1 == -1) {
+      printf("-%s: fork: %s\n", sysname, strerror(errno));
+      close(pipefd[0]);
+      close(pipefd[1]);
+      return SUCCESS;
+    }
+    if (pid1 == 0) {
+      // child 1: write stdout into the pipe
+      dup2(pipefd[1], STDOUT_FILENO);
+      close(pipefd[0]);
+      close(pipefd[1]);
+      if (command->redirects[0]) {
+        int fd = open(command->redirects[0], O_RDONLY);
+        if (fd == -1) {
+          printf("-%s: %s: %s\n", sysname, command->redirects[0], strerror(errno));
+          exit(1);
+        }
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+      }
+      char *path_env = getenv("PATH");
+      if (path_env != NULL) {
+        char *path_copy = strdup(path_env);
+        char *dir = strtok(path_copy, ":");
+        while (dir != NULL) {
+          char full_path[1024];
+          snprintf(full_path, sizeof(full_path), "%s/%s", dir, command->name);
+          execv(full_path, command->args);
+          dir = strtok(NULL, ":");
+        }
+        free(path_copy);
+      }
+      printf("-%s: %s: command not found\n", sysname, command->name);
+      exit(127);
+    }
+
+    pid_t pid2 = fork();
+    if (pid2 == -1) {
+      printf("-%s: fork: %s\n", sysname, strerror(errno));
+      close(pipefd[0]);
+      close(pipefd[1]);
+      waitpid(pid1, NULL, 0);
+      return SUCCESS;
+    }
+    if (pid2 == 0) {
+      // child 2: read stdin from the pipe
+      dup2(pipefd[0], STDIN_FILENO);
+      close(pipefd[0]);
+      close(pipefd[1]);
+      struct command_t *next = command->next;
+      if (next->redirects[1]) {
+        int fd = open(next->redirects[1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd == -1) {
+          printf("-%s: %s: %s\n", sysname, next->redirects[1], strerror(errno));
+          exit(1);
+        }
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+      }
+      if (next->redirects[2]) {
+        int fd = open(next->redirects[2], O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd == -1) {
+          printf("-%s: %s: %s\n", sysname, next->redirects[2], strerror(errno));
+          exit(1);
+        }
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+      }
+      char *path_env = getenv("PATH");
+      if (path_env != NULL) {
+        char *path_copy = strdup(path_env);
+        char *dir = strtok(path_copy, ":");
+        while (dir != NULL) {
+          char full_path[1024];
+          snprintf(full_path, sizeof(full_path), "%s/%s", dir, next->name);
+          execv(full_path, next->args);
+          dir = strtok(NULL, ":");
+        }
+        free(path_copy);
+      }
+      printf("-%s: %s: command not found\n", sysname, next->name);
+      exit(127);
+    }
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+    return SUCCESS;
+  }
+
   pid_t pid = fork();
   if (pid == 0) // child
   {
