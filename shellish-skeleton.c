@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -334,8 +335,35 @@ int process_command(struct command_t *command) {
     // add a NULL argument to the end of args, and the name to the beginning
     // as required by exec
 
-    // TODO: do your own exec with path resolving using execv()
-    // do so by replacing the execvp call below
+    // I/O redirection
+    if (command->redirects[0]) { // < input redirection
+      int fd = open(command->redirects[0], O_RDONLY);
+      if (fd == -1) {
+        printf("-%s: %s: %s\n", sysname, command->redirects[0], strerror(errno));
+        exit(1);
+      }
+      dup2(fd, STDIN_FILENO);
+      close(fd);
+    }
+    if (command->redirects[1]) { // > output redirection (truncate)
+      int fd = open(command->redirects[1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if (fd == -1) {
+        printf("-%s: %s: %s\n", sysname, command->redirects[1], strerror(errno));
+        exit(1);
+      }
+      dup2(fd, STDOUT_FILENO);
+      close(fd);
+    }
+    if (command->redirects[2]) { // >> output redirection (append)
+      int fd = open(command->redirects[2], O_WRONLY | O_CREAT | O_APPEND, 0644);
+      if (fd == -1) {
+        printf("-%s: %s: %s\n", sysname, command->redirects[2], strerror(errno));
+        exit(1);
+      }
+      dup2(fd, STDOUT_FILENO);
+      close(fd);
+    }
+
     char *path_env = getenv("PATH");
     if (path_env != NULL) {
       char *path_copy = strdup(path_env);
