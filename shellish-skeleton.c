@@ -326,7 +326,7 @@ int process_command(struct command_t *command) {
   pid_t pid = fork();
   if (pid == 0) // child
   {
-    /// This shows how to do exec with environ (but is not available on MacOs)
+    // This shows how to do exec with environ (but is not available on MacOs)
     // extern char** environ; // environment variables
     // execvpe(command->name, command->args, environ); // exec+args+path+environ
 
@@ -336,12 +336,27 @@ int process_command(struct command_t *command) {
 
     // TODO: do your own exec with path resolving using execv()
     // do so by replacing the execvp call below
-    execvp(command->name, command->args); // exec+args+path
+    char *path_env = getenv("PATH");
+    if (path_env != NULL) {
+      char *path_copy = strdup(path_env);
+      char *dir = strtok(path_copy, ":");
+      while (dir != NULL) {
+        char full_path[1024];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir, command->name);
+        execv(full_path, command->args);
+        dir = strtok(NULL, ":");
+      }
+      free(path_copy);
+    }
     printf("-%s: %s: command not found\n", sysname, command->name);
     exit(127);
   } else {
     // TODO: implement background processes here
-    wait(0); // wait for child process to finish
+    if (command->background) {
+      printf("[Background PID: %d]\n", pid);
+    } else {
+      wait(0);
+    }
     return SUCCESS;
   }
 }
