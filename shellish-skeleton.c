@@ -9,6 +9,12 @@
 #include <unistd.h>
 const char *sysname = "shellish";
 
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+static char shellish_home[PATH_MAX];
+
 enum return_codes {
   SUCCESS = 0,
   EXIT = 1,
@@ -335,6 +341,18 @@ static void exec_cmd(struct command_t *cmd) {
     dup2(fd, STDOUT_FILENO);
     close(fd);
   }
+
+  // 1. Check if it's already an absolute or relative path (e.g., ./mycut or /bin/ls)
+  if (strchr(cmd->name, '/') != NULL) {
+    execv(cmd->name, cmd->args);
+  }
+
+  // 2. Search in the Current Working Directory (to find commands like 'mycut' without './')
+  char local_path[1024];
+  snprintf(local_path, sizeof(local_path), "./%s", cmd->name);
+  execv(local_path, cmd->args);
+
+  // 3. Search in the system PATH (to find 'ls', 'cat', etc.) 
   char *path_env = getenv("PATH");
   if (path_env != NULL) {
     char *path_copy = strdup(path_env);
@@ -347,6 +365,7 @@ static void exec_cmd(struct command_t *cmd) {
     }
     free(path_copy);
   }
+
   printf("-%s: %s: command not found\n", sysname, cmd->name);
   exit(127);
 }
@@ -387,6 +406,18 @@ static void execute_pipeline(struct command_t *cmd) {
       dup2(fd, STDIN_FILENO);
       close(fd);
     }
+
+    // 1. Check if it's already an absolute or relative path (e.g., ./mycut or /bin/ls)
+    if (strchr(cmd->name, '/') != NULL) {
+      execv(cmd->name, cmd->args);
+    }
+
+    // 2. Search in the Current Working Directory (to find commands like 'mycut' without './')
+    char local_path[1024];
+    snprintf(local_path, sizeof(local_path), "./%s", cmd->name);
+    execv(local_path, cmd->args);
+
+    // 3. Search in the system PATH (to find 'ls', 'cat', etc.) 
     char *path_env = getenv("PATH");
     if (path_env != NULL) {
       char *path_copy = strdup(path_env);
@@ -413,6 +444,39 @@ static void execute_pipeline(struct command_t *cmd) {
 
 int process_command(struct command_t *command) {
   int r;
+
+  if (strcmp(command->name, "soda") == 0) {
+    pid_t pid = fork();
+    if (pid == 0) {
+      size_t need = strlen(shellish_home) + strlen("/soda.py") + 1;
+      char *script_path = (char *)malloc(need);
+      if (!script_path) {
+        fprintf(stderr, "Error: out of memory\n");
+        exit(1);
+      }
+      snprintf(script_path, need, "%s/soda.py", shellish_home);
+
+      char *target = NULL;
+      if (command->arg_count > 0 && command->args[1] != NULL)
+        target = command->args[1];
+
+      if (target) {
+        char *args[] = {"python3", script_path, target, NULL};
+        execvp("python3", args);
+      } else {
+        char *args[] = {"python3", script_path, NULL};
+        execvp("python3", args);
+      }
+
+      fprintf(stderr, "Error: cannot run %s\n", script_path);
+      free(script_path);
+      exit(1);
+    } else {
+        waitpid(pid, NULL, 0);
+        return SUCCESS;
+    }
+  
+  }
   if (strcmp(command->name, "") == 0)
     return SUCCESS;
 
@@ -447,19 +511,24 @@ int process_command(struct command_t *command) {
   if (pid == 0) // child
   {
     exec_cmd(command);
-    return SUCCESS;
+    exit(1);
   } else {
     // TODO: implement background processes here
     if (command->background) {
       printf("[Background PID: %d]\n", pid);
     } else {
-      wait(0);
+      waitpid(pid, NULL, 0);
     }
     return SUCCESS;
   }
 }
 
 int main() {
+  if (getcwd(shellish_home, sizeof(shellish_home)) == NULL) {
+    fprintf(stderr, "shellish: getcwd failed: %s\n", strerror(errno));
+    return 1;
+  }
+
   while (1) {
     struct command_t *command =
         (struct command_t *)malloc(sizeof(struct command_t));
